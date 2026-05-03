@@ -1,6 +1,29 @@
 const Transaction = require("../models/Transaction");
 const User = require("../models/User");
 
+// 🔥 GET ALL TRANSACTIONS (NEW)
+exports.getAllTransactions = async (req, res) => {
+  try {
+    const { type, status } = req.query;
+
+    const filter = {};
+
+    if (type) filter.type = type;
+    if (status) filter.status = status;
+
+    const transactions = await Transaction.find(filter)
+      .populate("user", "name email")
+      .sort({ createdAt: -1 });
+
+    res.json(transactions);
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch transactions"
+    });
+  }
+};
+
 // 🔥 GET ALL PENDING TRANSACTIONS
 exports.getPendingTransactions = async (req, res) => {
   try {
