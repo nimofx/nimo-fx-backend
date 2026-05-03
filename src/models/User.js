@@ -65,6 +65,41 @@ const userSchema = new mongoose.Schema(
       default: null
     },
 
+    referralCode: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      unique: true,
+      sparse: true
+    },
+    referredBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null
+    },
+    referredByCode: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: ""
+    },
+    isReferralLocked: {
+      type: Boolean,
+      default: false
+    },
+    referralBonus: {
+      type: Number,
+      default: 0
+    },
+    premiumRewardUnlocked: {
+      type: Boolean,
+      default: false
+    },
+    premiumRewardCredited: {
+      type: Boolean,
+      default: false
+    },
+
     isActive: {
       type: Boolean,
       default: true
