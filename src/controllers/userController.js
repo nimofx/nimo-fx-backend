@@ -9,6 +9,7 @@ exports.getMe = async (req, res) => {
       role: req.user.role,
       roles: req.user.roles || ["user"],
       kycStatus: req.user.kycStatus,
+      kyc: req.user.kyc || null,
       walletBalance: req.user.walletBalance,
       lockBalance: req.user.lockBalance || 0,
       lockUntil: req.user.lockUntil || null
@@ -51,21 +52,43 @@ exports.getWallet = async (req, res) => {
 
 exports.submitKyc = async (req, res) => {
   try {
-    const { fullName, dob, address, panNumber, aadhaarNumber } = req.body;
+    const {
+      dob,
+      address1,
+      address2,
+      district,
+      state,
+      pin,
+      aadhaar
+    } = req.body;
 
-    if (!fullName || !dob || !address || !panNumber || !aadhaarNumber) {
+    if (!dob || !address1 || !district || !state || !pin || !aadhaar) {
       return res.status(400).json({
         success: false,
         message: "All KYC fields are required"
       });
     }
 
+    const aadhaarFront = req.files?.aadhaarFront?.[0]?.path || "";
+    const aadhaarBack = req.files?.aadhaarBack?.[0]?.path || "";
+
+    if (!aadhaarFront || !aadhaarBack) {
+      return res.status(400).json({
+        success: false,
+        message: "Aadhaar front and back images are required"
+      });
+    }
+
     req.user.kyc = {
-      fullName,
       dob,
-      address,
-      panNumber,
-      aadhaarNumber
+      address1,
+      address2: address2 || "",
+      district,
+      state,
+      pin,
+      aadhaar,
+      aadhaarFront,
+      aadhaarBack
     };
 
     req.user.kycStatus = "pending";

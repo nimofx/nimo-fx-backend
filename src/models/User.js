@@ -41,11 +41,15 @@ const userSchema = new mongoose.Schema(
       default: "not_submitted"
     },
     kyc: {
-      fullName: String,
       dob: String,
-      address: String,
-      panNumber: String,
-      aadhaarNumber: String
+      address1: String,
+      address2: String,
+      district: String,
+      state: String,
+      pin: String,
+      aadhaar: String,
+      aadhaarFront: String,
+      aadhaarBack: String
     },
 
     walletBalance: {

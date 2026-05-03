@@ -9,7 +9,8 @@ const rateLimit = require("express-rate-limit");
 const authRoutes = require("./routes/authRoutes");
 const userRoutes = require("./routes/userRoutes");
 const transactionRoutes = require("./routes/transactionRoutes");
-const adminRoutes = require("./routes/adminRoutes"); // 🔥 ADD
+const kycRoutes = require("./routes/kycRoutes");
+const adminRoutes = require("./routes/adminRoutes");
 
 const app = express();
 
@@ -32,6 +33,9 @@ app.use(
   })
 );
 
+// 🔥 IMPORTANT: serve uploaded images
+app.use("/uploads", express.static("uploads"));
+
 app.get("/", (req, res) => {
   res.json({ success: true, message: "NIMO FX API is running" });
 });
@@ -39,6 +43,7 @@ app.get("/", (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api", transactionRoutes);
+app.use("/api", kycRoutes);
 
 // 🔥 ADMIN ROUTES
 app.use("/api/admin", adminRoutes);

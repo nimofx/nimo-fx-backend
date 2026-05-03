@@ -1,7 +1,114 @@
 const Transaction = require("../models/Transaction");
 const User = require("../models/User");
 
-// 🔥 GET ALL TRANSACTIONS (NEW)
+// 🔥 GET ALL USERS
+exports.getAllUsers = async (req, res) => {
+  try {
+    const users = await User.find({})
+      .select("-password")
+      .sort({ createdAt: -1 });
+
+    res.json(users);
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch users"
+    });
+  }
+};
+
+// 🔥 BLOCK USER
+exports.blockUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    await User.findByIdAndUpdate(id, { isActive: false });
+
+    res.json({
+      success: true,
+      message: "User blocked"
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to block user"
+    });
+  }
+};
+
+// 🔥 UNBLOCK USER
+exports.unblockUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    await User.findByIdAndUpdate(id, { isActive: true });
+
+    res.json({
+      success: true,
+      message: "User unblocked"
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to unblock user"
+    });
+  }
+};
+
+// 🔥 UPDATE USER BALANCE
+exports.updateUserBalance = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, action } = req.body;
+
+    const amt = Number(amount);
+
+    if (!amt || amt <= 0 || !["add", "subtract"].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid balance update request"
+      });
+    }
+
+    const user = await User.findById(id);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    if (action === "add") {
+      user.walletBalance += amt;
+    }
+
+    if (action === "subtract") {
+      if (amt > user.walletBalance) {
+        return res.status(400).json({
+          success: false,
+          message: "Insufficient user balance"
+        });
+      }
+
+      user.walletBalance -= amt;
+    }
+
+    await user.save();
+
+    res.json({
+      success: true,
+      message: "Balance updated"
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to update balance"
+    });
+  }
+};
+
+// 🔥 GET ALL TRANSACTIONS
 exports.getAllTransactions = async (req, res) => {
   try {
     const { type, status } = req.query;
@@ -72,18 +179,15 @@ exports.approveTransaction = async (req, res) => {
       });
     }
 
-    // ✅ DEPOSIT APPROVE
     if (tx.type === "deposit") {
       user.lockBalance += tx.amount;
 
-      const lockDays = 60;
       const lockUntil = new Date();
-      lockUntil.setDate(lockUntil.getDate() + lockDays);
+      lockUntil.setDate(lockUntil.getDate() + 60);
 
       user.lockUntil = lockUntil;
     }
 
-    // ✅ WITHDRAW APPROVE
     if (tx.type === "withdraw") {
       if (tx.amount > user.walletBalance) {
         return res.status(400).json({
