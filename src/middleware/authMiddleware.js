@@ -1,6 +1,7 @@
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
+// 🔐 USER PROTECT
 const protect = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
@@ -34,4 +35,20 @@ const protect = async (req, res, next) => {
   }
 };
 
-module.exports = { protect };
+// 🔥 ADMIN ONLY (UPDATED)
+const adminOnly = (req, res, next) => {
+  const isAdmin =
+    req.user?.role === "admin" ||
+    (Array.isArray(req.user?.roles) && req.user.roles.includes("admin"));
+
+  if (!isAdmin) {
+    return res.status(403).json({
+      success: false,
+      message: "Access denied. Admin only"
+    });
+  }
+
+  next();
+};
+
+module.exports = { protect, adminOnly };

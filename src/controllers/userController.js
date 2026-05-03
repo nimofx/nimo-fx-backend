@@ -7,11 +7,46 @@ exports.getMe = async (req, res) => {
       email: req.user.email,
       phone: req.user.phone,
       role: req.user.role,
+      roles: req.user.roles || ["user"],
       kycStatus: req.user.kycStatus,
-      walletBalance: req.user.walletBalance
+      walletBalance: req.user.walletBalance,
+      lockBalance: req.user.lockBalance || 0,
+      lockUntil: req.user.lockUntil || null
     },
     kycStatus: req.user.kycStatus
   });
+};
+
+exports.getWallet = async (req, res) => {
+  try {
+    const walletBalance = Number(req.user.walletBalance || 0);
+    const lockBalance = Number(req.user.lockBalance || 0);
+
+    let lockDaysRemaining = 0;
+
+    if (req.user.lockUntil) {
+      const now = new Date();
+      const lockUntil = new Date(req.user.lockUntil);
+
+      if (lockUntil > now) {
+        lockDaysRemaining = Math.ceil(
+          (lockUntil.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
+        );
+      }
+    }
+
+    res.json({
+      totalBalance: walletBalance + lockBalance,
+      withdrawableBalance: walletBalance,
+      lockBalance,
+      lockDaysRemaining
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch wallet"
+    });
+  }
 };
 
 exports.submitKyc = async (req, res) => {

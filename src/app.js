@@ -8,6 +8,8 @@ const rateLimit = require("express-rate-limit");
 
 const authRoutes = require("./routes/authRoutes");
 const userRoutes = require("./routes/userRoutes");
+const transactionRoutes = require("./routes/transactionRoutes");
+const adminRoutes = require("./routes/adminRoutes"); // 🔥 ADD
 
 const app = express();
 
@@ -36,6 +38,10 @@ app.get("/", (req, res) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api/user", userRoutes);
+app.use("/api", transactionRoutes);
+
+// 🔥 ADMIN ROUTES
+app.use("/api/admin", adminRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ success: false, message: "Route not found" });
