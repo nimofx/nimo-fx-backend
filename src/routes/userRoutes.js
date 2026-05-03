@@ -4,10 +4,10 @@ const { protect } = require("../middleware/authMiddleware");
 const {
   getMe,
   submitKyc,
-  getWallet,
-  getReferral,
-  applyReferralCode
+  getWallet
 } = require("../controllers/userController");
+
+const referralRoutes = require("./referralRoutes");
 
 const router = express.Router();
 
@@ -20,7 +20,6 @@ router.post("/kyc", protect, submitKyc);
 router.get("/wallet", protect, getWallet);
 
 // REFERRAL
-router.get("/referral", protect, getReferral);
-router.post("/referral/apply", protect, applyReferralCode);
+router.use("/referral", referralRoutes);
 
 module.exports = router;
