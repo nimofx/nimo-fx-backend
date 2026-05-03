@@ -10,7 +10,8 @@ const authRoutes = require("./routes/authRoutes");
 const userRoutes = require("./routes/userRoutes");
 const transactionRoutes = require("./routes/transactionRoutes");
 const kycRoutes = require("./routes/kycRoutes");
-const supportRoutes = require("./routes/supportRoutes"); // 🔥 ADD
+const supportRoutes = require("./routes/supportRoutes");
+const depositSettingRoutes = require("./routes/depositSettingRoutes");
 const adminRoutes = require("./routes/adminRoutes");
 
 const app = express();
@@ -34,7 +35,7 @@ app.use(
   })
 );
 
-// 🔥 serve uploaded images
+// serve uploaded images
 app.use("/uploads", express.static("uploads"));
 
 app.get("/", (req, res) => {
@@ -46,7 +47,8 @@ app.use("/api/auth", authRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api", transactionRoutes);
 app.use("/api", kycRoutes);
-app.use("/api", supportRoutes); // 🔥 ADD
+app.use("/api", supportRoutes);
+app.use("/api", depositSettingRoutes);
 
 // ADMIN
 app.use("/api/admin", adminRoutes);
