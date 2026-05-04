@@ -1,5 +1,108 @@
 const Transaction = require("../models/Transaction");
 
+const roundAmount = (value) => Number(Number(value || 0).toFixed(8));
+
+const calculateDaysRemaining = (unlockAt) => {
+  if (!unlockAt) return 0;
+
+  const now = new Date();
+  const unlockDate = new Date(unlockAt);
+
+  if (unlockDate <= now) return 0;
+
+  return Math.ceil(
+    (unlockDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
+  );
+};
+
+const syncLockBalanceFromEntries = (user) => {
+  const entries = Array.isArray(user.lockEntries) ? user.lockEntries : [];
+
+  const activeEntries = entries.filter((entry) => Number(entry.amount || 0) > 0);
+
+  user.lockEntries = activeEntries;
+  user.lockBalance = roundAmount(
+    activeEntries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
+  );
+
+  if (activeEntries.length > 0) {
+    user.lockUntil = activeEntries.reduce((latest, entry) => {
+      if (!entry.unlockAt) return latest;
+
+      const unlockAt = new Date(entry.unlockAt);
+
+      if (!latest || unlockAt > latest) {
+        return unlockAt;
+      }
+
+      return latest;
+    }, null);
+  } else {
+    user.lockUntil = null;
+  }
+};
+
+const autoUnlockExpiredLockEntries = async (user) => {
+  if (!user) return user;
+
+  const now = new Date();
+  const entries = Array.isArray(user.lockEntries) ? user.lockEntries : [];
+
+  if (entries.length === 0 && Number(user.lockBalance || 0) > 0 && user.lockUntil) {
+    const lockUntil = new Date(user.lockUntil);
+
+    if (lockUntil <= now) {
+      user.walletBalance = roundAmount(
+        Number(user.walletBalance || 0) + Number(user.lockBalance || 0)
+      );
+      user.lockBalance = 0;
+      user.lockUntil = null;
+      await user.save();
+    }
+
+    return user;
+  }
+
+  let unlockedAmount = 0;
+  const activeEntries = [];
+
+  entries.forEach((entry) => {
+    const amount = Number(entry.amount || 0);
+
+    if (amount <= 0) return;
+
+    if (entry.unlockAt && new Date(entry.unlockAt) <= now) {
+      unlockedAmount += amount;
+    } else {
+      activeEntries.push(entry);
+    }
+  });
+
+  if (unlockedAmount > 0 || activeEntries.length !== entries.length) {
+    user.walletBalance = roundAmount(Number(user.walletBalance || 0) + unlockedAmount);
+    user.lockEntries = activeEntries;
+    syncLockBalanceFromEntries(user);
+    await user.save();
+  }
+
+  return user;
+};
+
+const formatLockEntries = (user) => {
+  const entries = Array.isArray(user.lockEntries) ? user.lockEntries : [];
+
+  return entries
+    .filter((entry) => Number(entry.amount || 0) > 0)
+    .map((entry) => ({
+      amount: Number(entry.amount || 0),
+      lockedAt: entry.lockedAt || null,
+      unlockAt: entry.unlockAt || null,
+      daysRemaining: calculateDaysRemaining(entry.unlockAt),
+      source: entry.source || "deposit",
+      transaction: entry.transaction || null
+    }));
+};
+
 const getTotalApprovedDeposit = async (userId) => {
   const result = await Transaction.aggregate([
     {
@@ -22,7 +125,10 @@ const getTotalApprovedDeposit = async (userId) => {
 
 exports.getMe = async (req, res) => {
   try {
+    await autoUnlockExpiredLockEntries(req.user);
+
     const totalApprovedDeposit = await getTotalApprovedDeposit(req.user._id);
+    const lockEntries = formatLockEntries(req.user);
 
     res.json({
       success: true,
@@ -39,6 +145,7 @@ exports.getMe = async (req, res) => {
         walletBalance: req.user.walletBalance,
         lockBalance: req.user.lockBalance || 0,
         lockUntil: req.user.lockUntil || null,
+        lockEntries,
         totalApprovedDeposit
       },
       kycStatus: req.user.kycStatus
@@ -53,27 +160,23 @@ exports.getMe = async (req, res) => {
 
 exports.getWallet = async (req, res) => {
   try {
+    await autoUnlockExpiredLockEntries(req.user);
+
     const walletBalance = Number(req.user.walletBalance || 0);
     const lockBalance = Number(req.user.lockBalance || 0);
+    const lockEntries = formatLockEntries(req.user);
 
-    let lockDaysRemaining = 0;
-
-    if (req.user.lockUntil) {
-      const now = new Date();
-      const lockUntil = new Date(req.user.lockUntil);
-
-      if (lockUntil > now) {
-        lockDaysRemaining = Math.ceil(
-          (lockUntil.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
-        );
-      }
-    }
+    const lockDaysRemaining =
+      lockEntries.length > 0
+        ? Math.max(...lockEntries.map((entry) => Number(entry.daysRemaining || 0)))
+        : 0;
 
     res.json({
-      totalBalance: walletBalance + lockBalance,
+      totalBalance: roundAmount(walletBalance + lockBalance),
       withdrawableBalance: walletBalance,
       lockBalance,
-      lockDaysRemaining
+      lockDaysRemaining,
+      lockEntries
     });
   } catch (error) {
     res.status(500).json({

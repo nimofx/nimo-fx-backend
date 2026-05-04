@@ -64,6 +64,154 @@ const isTradingTimeIST = () => {
   return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
 };
 
+const syncLockBalanceFromEntries = (user) => {
+  const entries = Array.isArray(user.lockEntries) ? user.lockEntries : [];
+
+  const activeEntries = entries.filter((entry) => Number(entry.amount || 0) > 0);
+
+  user.lockEntries = activeEntries;
+  user.lockBalance = roundAmount(
+    activeEntries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
+  );
+
+  if (activeEntries.length > 0) {
+    user.lockUntil = activeEntries.reduce((latest, entry) => {
+      if (!entry.unlockAt) return latest;
+
+      const unlockAt = new Date(entry.unlockAt);
+
+      if (!latest || unlockAt > latest) {
+        return unlockAt;
+      }
+
+      return latest;
+    }, null);
+  } else {
+    user.lockUntil = null;
+  }
+};
+
+const autoUnlockExpiredLockEntries = async (user) => {
+  if (!user) return user;
+
+  const now = new Date();
+  const entries = Array.isArray(user.lockEntries) ? user.lockEntries : [];
+
+  if (entries.length === 0 && Number(user.lockBalance || 0) > 0 && user.lockUntil) {
+    const lockUntil = new Date(user.lockUntil);
+
+    if (lockUntil <= now) {
+      user.walletBalance = roundAmount(
+        Number(user.walletBalance || 0) + Number(user.lockBalance || 0)
+      );
+      user.lockBalance = 0;
+      user.lockUntil = null;
+      await user.save();
+    }
+
+    return user;
+  }
+
+  let unlockedAmount = 0;
+  const activeEntries = [];
+
+  entries.forEach((entry) => {
+    const amount = Number(entry.amount || 0);
+
+    if (amount <= 0) return;
+
+    if (entry.unlockAt && new Date(entry.unlockAt) <= now) {
+      unlockedAmount += amount;
+    } else {
+      activeEntries.push(entry);
+    }
+  });
+
+  if (unlockedAmount > 0 || activeEntries.length !== entries.length) {
+    user.walletBalance = roundAmount(Number(user.walletBalance || 0) + unlockedAmount);
+    user.lockEntries = activeEntries;
+    syncLockBalanceFromEntries(user);
+    await user.save();
+  }
+
+  return user;
+};
+
+const deductFromLockEntries = (user, amountNeeded) => {
+  let remaining = roundAmount(amountNeeded);
+  const lockedParts = [];
+
+  let entries = Array.isArray(user.lockEntries) ? user.lockEntries : [];
+
+  entries = entries
+    .map((entry) => ({
+      amount: Number(entry.amount || 0),
+      lockedAt: entry.lockedAt || null,
+      unlockAt: entry.unlockAt || user.lockUntil || null,
+      source: entry.source || "deposit",
+      transaction: entry.transaction || null
+    }))
+    .filter((entry) => entry.amount > 0)
+    .sort((a, b) => new Date(a.unlockAt || 0) - new Date(b.unlockAt || 0));
+
+  if (entries.length === 0 && Number(user.lockBalance || 0) > 0) {
+    const fallbackUnlockAt = user.lockUntil || new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
+
+    entries = [
+      {
+        amount: Number(user.lockBalance || 0),
+        lockedAt: user.createdAt || new Date(),
+        unlockAt: fallbackUnlockAt,
+        source: "legacy",
+        transaction: null
+      }
+    ];
+  }
+
+  const updatedEntries = [];
+
+  for (const entry of entries) {
+    if (remaining <= 0) {
+      updatedEntries.push(entry);
+      continue;
+    }
+
+    const deductAmount = Math.min(Number(entry.amount || 0), remaining);
+
+    if (deductAmount > 0) {
+      lockedParts.push({
+        amount: roundAmount(deductAmount),
+        lockedAt: entry.lockedAt || null,
+        unlockAt: entry.unlockAt || null,
+        source: entry.source || "deposit",
+        transaction: entry.transaction || null
+      });
+
+      remaining = roundAmount(remaining - deductAmount);
+    }
+
+    const leftAmount = roundAmount(Number(entry.amount || 0) - deductAmount);
+
+    if (leftAmount > 0) {
+      updatedEntries.push({
+        ...entry,
+        amount: leftAmount
+      });
+    }
+  }
+
+  user.lockEntries = updatedEntries;
+  syncLockBalanceFromEntries(user);
+
+  return {
+    amountFromLock: roundAmount(
+      lockedParts.reduce((sum, item) => sum + Number(item.amount || 0), 0)
+    ),
+    lockedParts,
+    remaining
+  };
+};
+
 const keepLatestSevenProfitRecords = async () => {
   const records = await TradeProfit.find().sort({ dateKey: -1 }).select("_id");
 
@@ -88,6 +236,8 @@ const settleActiveTrades = async (profitRecord) => {
 
     if (!user) continue;
 
+    await autoUnlockExpiredLockEntries(user);
+
     const grossProfit = roundAmount(
       (Number(trade.amount || 0) * Number(profitRecord.profitPercent || 0)) / 100
     );
@@ -99,7 +249,52 @@ const settleActiveTrades = async (profitRecord) => {
     const netProfit = roundAmount(grossProfit - commissionAmount);
     const returnAmount = roundAmount(Number(trade.amount || 0) + netProfit);
 
-    user.walletBalance = roundAmount(Number(user.walletBalance || 0) + returnAmount);
+    user.walletBalance = roundAmount(
+      Number(user.walletBalance || 0) +
+        Number(trade.amountFromWallet || 0) +
+        netProfit
+    );
+
+    const now = new Date();
+
+    let lockedParts = Array.isArray(trade.lockedParts) ? trade.lockedParts : [];
+
+    if (lockedParts.length === 0 && Number(trade.amountFromLock || 0) > 0) {
+      const fallbackUnlockAt = new Date(trade.startedAt || new Date());
+      fallbackUnlockAt.setDate(fallbackUnlockAt.getDate() + 60);
+
+      lockedParts = [
+        {
+          amount: Number(trade.amountFromLock || 0),
+          lockedAt: trade.startedAt || new Date(),
+          unlockAt: fallbackUnlockAt,
+          source: "legacy",
+          transaction: null
+        }
+      ];
+    }
+
+    user.lockEntries = Array.isArray(user.lockEntries) ? user.lockEntries : [];
+
+    lockedParts.forEach((part) => {
+      const amount = Number(part.amount || 0);
+
+      if (amount <= 0) return;
+
+      if (part.unlockAt && new Date(part.unlockAt) <= now) {
+        user.walletBalance = roundAmount(Number(user.walletBalance || 0) + amount);
+      } else {
+        user.lockEntries.push({
+          amount,
+          lockedAt: part.lockedAt || trade.startedAt || new Date(),
+          unlockAt: part.unlockAt || null,
+          source: part.source || "deposit",
+          transaction: part.transaction || null
+        });
+      }
+    });
+
+    syncLockBalanceFromEntries(user);
 
     trade.status = "settled";
     trade.profitPercent = Number(profitRecord.profitPercent || 0);
@@ -123,6 +318,12 @@ const settleActiveTrades = async (profitRecord) => {
 // USER: trade overview
 exports.getTrade = async (req, res) => {
   try {
+    const user = await User.findById(req.user._id);
+
+    if (user) {
+      await autoUnlockExpiredLockEntries(user);
+    }
+
     const activeTrades = await Trade.find({
       user: req.user._id,
       status: "active"
@@ -186,6 +387,8 @@ exports.startTrade = async (req, res) => {
       });
     }
 
+    await autoUnlockExpiredLockEntries(user);
+
     const walletBalance = Number(user.walletBalance || 0);
     const lockBalance = Number(user.lockBalance || 0);
     const totalWalletBalance = roundAmount(walletBalance + lockBalance);
@@ -203,11 +406,15 @@ exports.startTrade = async (req, res) => {
     user.walletBalance = roundAmount(walletBalance - amountFromWallet);
     remaining = roundAmount(remaining - amountFromWallet);
 
-    const amountFromLock = Math.min(lockBalance, remaining);
-    user.lockBalance = roundAmount(lockBalance - amountFromLock);
-    remaining = roundAmount(remaining - amountFromLock);
+    const lockDeduction = remaining > 0
+      ? deductFromLockEntries(user, remaining)
+      : {
+          amountFromLock: 0,
+          lockedParts: [],
+          remaining: 0
+        };
 
-    if (remaining > 0) {
+    if (lockDeduction.remaining > 0) {
       return res.status(400).json({
         success: false,
         message: "Insufficient balance"
@@ -218,7 +425,8 @@ exports.startTrade = async (req, res) => {
       user: user._id,
       amount,
       amountFromWallet,
-      amountFromLock,
+      amountFromLock: lockDeduction.amountFromLock,
+      lockedParts: lockDeduction.lockedParts,
       status: "active",
       startedAt: new Date()
     });

@@ -24,6 +24,32 @@ const tradeSchema = new mongoose.Schema(
       default: 0
     },
 
+    lockedParts: [
+      {
+        amount: {
+          type: Number,
+          default: 0
+        },
+        lockedAt: {
+          type: Date,
+          default: null
+        },
+        unlockAt: {
+          type: Date,
+          default: null
+        },
+        source: {
+          type: String,
+          default: "deposit"
+        },
+        transaction: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Transaction",
+          default: null
+        }
+      }
+    ],
+
     status: {
       type: String,
       enum: ["active", "settled", "cancelled"],

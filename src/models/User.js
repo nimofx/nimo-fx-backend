@@ -87,6 +87,31 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null
     },
+    lockEntries: [
+      {
+        amount: {
+          type: Number,
+          default: 0
+        },
+        lockedAt: {
+          type: Date,
+          default: Date.now
+        },
+        unlockAt: {
+          type: Date,
+          default: null
+        },
+        source: {
+          type: String,
+          default: "deposit"
+        },
+        transaction: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Transaction",
+          default: null
+        }
+      }
+    ],
 
     referralCode: {
       type: String,
