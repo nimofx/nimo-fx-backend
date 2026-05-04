@@ -12,6 +12,7 @@ const transactionRoutes = require("./routes/transactionRoutes");
 const kycRoutes = require("./routes/kycRoutes");
 const supportRoutes = require("./routes/supportRoutes");
 const depositSettingRoutes = require("./routes/depositSettingRoutes");
+const tradeRoutes = require("./routes/tradeRoutes");
 const adminRoutes = require("./routes/adminRoutes");
 
 const app = express();
@@ -49,6 +50,7 @@ app.use("/api", transactionRoutes);
 app.use("/api", kycRoutes);
 app.use("/api", supportRoutes);
 app.use("/api", depositSettingRoutes);
+app.use("/api", tradeRoutes);
 
 // ADMIN
 app.use("/api/admin", adminRoutes);
