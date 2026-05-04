@@ -23,12 +23,15 @@ const getOtpExpiry = () => {
 const createTransporter = () => {
   return nodemailer.createTransport({
     host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT || 465),
-    secure: String(process.env.SMTP_SECURE || "true") === "true",
+    port: Number(process.env.SMTP_PORT || 587),
+    secure: String(process.env.SMTP_SECURE || "false") === "true",
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS
-    }
+    },
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 15000
   });
 };
 
@@ -145,6 +148,8 @@ exports.register = async (req, res) => {
       email: cleanEmail
     });
   } catch (error) {
+    console.error("Register error:", error);
+
     res.status(500).json({
       success: false,
       message: error.message || "Registration failed"
@@ -208,6 +213,8 @@ exports.login = async (req, res) => {
       user: sanitizeUser(user)
     });
   } catch (error) {
+    console.error("Login error:", error);
+
     res.status(500).json({
       success: false,
       message: "Login failed"
@@ -258,6 +265,8 @@ exports.sendOtp = async (req, res) => {
       message: "OTP sent to your email"
     });
   } catch (error) {
+    console.error("Send OTP error:", error);
+
     res.status(500).json({
       success: false,
       message: error.message || "Failed to send OTP"
@@ -336,6 +345,8 @@ exports.verifyOtp = async (req, res) => {
       message: "Invalid OTP purpose"
     });
   } catch (error) {
+    console.error("Verify OTP error:", error);
+
     res.status(500).json({
       success: false,
       message: "OTP verification failed"
@@ -396,6 +407,8 @@ exports.resetPassword = async (req, res) => {
       message: "Password reset successfully"
     });
   } catch (error) {
+    console.error("Reset password error:", error);
+
     res.status(500).json({
       success: false,
       message: "Password reset failed"
