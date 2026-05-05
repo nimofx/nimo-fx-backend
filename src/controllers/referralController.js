@@ -58,10 +58,10 @@ const getTierByDeposit = (deposit) => {
 };
 
 const getCommissionByTier = (tier) => {
-  if (tier === 5) return { directCommission: 15, indirectCommission: 5 };
-  if (tier === 4) return { directCommission: 12, indirectCommission: 4 };
-  if (tier === 3) return { directCommission: 10, indirectCommission: 3 };
-  if (tier === 2) return { directCommission: 9, indirectCommission: 2 };
+  if (tier === 5) return { directCommission: 20, indirectCommission: 10 };
+  if (tier === 4) return { directCommission: 16, indirectCommission: 8 };
+  if (tier === 3) return { directCommission: 12, indirectCommission: 6 };
+  if (tier === 2) return { directCommission: 10, indirectCommission: 4 };
 
   return { directCommission: 8, indirectCommission: 2 };
 };
