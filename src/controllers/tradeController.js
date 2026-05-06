@@ -7,7 +7,11 @@ const COMMISSION_PERCENT = 10;
 
 const TRADE_REFERRAL_REQUIRED_COUNT = 20;
 const TRADE_REFERRAL_REWARD_AMOUNT = 500;
-const TRADE_REFERRAL_REWARD_NOTE = "20 active trade referrals reward";
+const TRADE_REFERRAL_REWARD_NOTE = "20 Refer Complete";
+const OLD_TRADE_REFERRAL_REWARD_NOTE = "20 active trade referrals reward";
+
+const DIRECT_REFERRAL_NOTE = "Direct Referral";
+const INDIRECT_REFERRAL_NOTE = "Indirect Referral";
 
 const roundAmount = (value) => Number(Number(value || 0).toFixed(8));
 
@@ -230,6 +234,120 @@ const keepLatestSevenProfitRecords = async () => {
   }
 };
 
+const getTotalApprovedDeposit = async (userId) => {
+  const result = await Transaction.aggregate([
+    {
+      $match: {
+        user: userId,
+        type: "deposit",
+        status: "approved"
+      }
+    },
+    {
+      $group: {
+        _id: null,
+        total: { $sum: "$amount" }
+      }
+    }
+  ]);
+
+  return Number(result?.[0]?.total || 0);
+};
+
+const getTierByDeposit = (deposit) => {
+  if (deposit >= 10000) return 5;
+  if (deposit >= 3500) return 4;
+  if (deposit >= 1250) return 3;
+  if (deposit >= 500) return 2;
+  return 1;
+};
+
+const getCommissionByTier = (tier) => {
+  if (tier === 5) return { directCommission: 20, indirectCommission: 10 };
+  if (tier === 4) return { directCommission: 16, indirectCommission: 8 };
+  if (tier === 3) return { directCommission: 12, indirectCommission: 6 };
+  if (tier === 2) return { directCommission: 10, indirectCommission: 4 };
+
+  return { directCommission: 8, indirectCommission: 2 };
+};
+
+const creditReferralBonusTransaction = async ({ user, amount, note }) => {
+  const bonusAmount = roundAmount(amount);
+
+  if (!user || !user.isActive || bonusAmount <= 0) return;
+
+  const existingTransaction = await Transaction.findOne({
+    user: user._id,
+    type: "referral",
+    status: "approved",
+    note
+  });
+
+  if (existingTransaction) return;
+
+  user.walletBalance = roundAmount(Number(user.walletBalance || 0) + bonusAmount);
+  user.referralBonus = roundAmount(Number(user.referralBonus || 0) + bonusAmount);
+
+  await user.save();
+
+  await Transaction.create({
+    user: user._id,
+    type: "referral",
+    amount: bonusAmount,
+    status: "approved",
+    note,
+    approvedAt: new Date()
+  });
+};
+
+const creditDirectAndIndirectReferralBonus = async ({
+  tradeUser,
+  trade,
+  commissionAmount
+}) => {
+  if (!tradeUser || !tradeUser.referredBy) return;
+
+  const directReferrer = await User.findById(tradeUser.referredBy);
+
+  if (!directReferrer || !directReferrer.isActive) return;
+
+  const directDeposit = await getTotalApprovedDeposit(directReferrer._id);
+  const directTier = getTierByDeposit(directDeposit);
+  const { directCommission } = getCommissionByTier(directTier);
+
+  const directBonus = roundAmount(
+    (Number(commissionAmount || 0) * Number(directCommission || 0)) / 100
+  );
+
+  await creditReferralBonusTransaction({
+    user: directReferrer,
+    amount: directBonus,
+    note: `${DIRECT_REFERRAL_NOTE} - Trade ${trade._id}`
+  });
+
+  if (!directReferrer.referredBy) return;
+
+  const indirectReferrer = await User.findById(directReferrer.referredBy);
+
+  if (!indirectReferrer || !indirectReferrer.isActive) return;
+
+  if (String(indirectReferrer._id) === String(tradeUser._id)) return;
+
+  const indirectDeposit = await getTotalApprovedDeposit(indirectReferrer._id);
+  const indirectTier = getTierByDeposit(indirectDeposit);
+  const { indirectCommission } = getCommissionByTier(indirectTier);
+
+  const indirectBonus = roundAmount(
+    (Number(commissionAmount || 0) * Number(indirectCommission || 0)) / 100
+  );
+
+  await creditReferralBonusTransaction({
+    user: indirectReferrer,
+    amount: indirectBonus,
+    note: `${INDIRECT_REFERRAL_NOTE} - Trade ${trade._id}`
+  });
+};
+
 const getCompletedTradeReferralCount = async (referrerId) => {
   const directUsers = await User.find({
     referredBy: referrerId
@@ -270,7 +388,9 @@ const creditTradeReferralRewardForSettledUsers = async (settledUserIds) => {
       user: referrerId,
       type: "referral",
       status: "approved",
-      note: TRADE_REFERRAL_REWARD_NOTE
+      note: {
+        $in: [TRADE_REFERRAL_REWARD_NOTE, OLD_TRADE_REFERRAL_REWARD_NOTE]
+      }
     });
 
     if (alreadyCredited) continue;
@@ -389,6 +509,12 @@ const settleActiveTrades = async (profitRecord) => {
 
     await user.save();
     await trade.save();
+
+    await creditDirectAndIndirectReferralBonus({
+      tradeUser: user,
+      trade,
+      commissionAmount
+    });
 
     settledCount += 1;
     settledUserIds.push(user._id);
