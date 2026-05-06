@@ -1,8 +1,13 @@
 const Trade = require("../models/Trade");
 const TradeProfit = require("../models/TradeProfit");
 const User = require("../models/User");
+const Transaction = require("../models/Transaction");
 
 const COMMISSION_PERCENT = 10;
+
+const TRADE_REFERRAL_REQUIRED_COUNT = 20;
+const TRADE_REFERRAL_REWARD_AMOUNT = 500;
+const TRADE_REFERRAL_REWARD_NOTE = "20 active trade referrals reward";
 
 const roundAmount = (value) => Number(Number(value || 0).toFixed(8));
 
@@ -155,7 +160,8 @@ const deductFromLockEntries = (user, amountNeeded) => {
     .sort((a, b) => new Date(a.unlockAt || 0) - new Date(b.unlockAt || 0));
 
   if (entries.length === 0 && Number(user.lockBalance || 0) > 0) {
-    const fallbackUnlockAt = user.lockUntil || new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
+    const fallbackUnlockAt =
+      user.lockUntil || new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
 
     entries = [
       {
@@ -224,12 +230,87 @@ const keepLatestSevenProfitRecords = async () => {
   }
 };
 
+const getCompletedTradeReferralCount = async (referrerId) => {
+  const directUsers = await User.find({
+    referredBy: referrerId
+  }).select("_id");
+
+  const directUserIds = directUsers.map((user) => user._id);
+
+  if (directUserIds.length === 0) return 0;
+
+  const completedReferralUserIds = await Trade.distinct("user", {
+    user: { $in: directUserIds },
+    status: "settled"
+  });
+
+  return completedReferralUserIds.length;
+};
+
+const creditTradeReferralRewardForSettledUsers = async (settledUserIds) => {
+  if (!settledUserIds || settledUserIds.length === 0) return;
+
+  const uniqueSettledUserIds = [
+    ...new Set(settledUserIds.map((id) => String(id)))
+  ];
+
+  const settledUsers = await User.find({
+    _id: { $in: uniqueSettledUserIds },
+    referredBy: { $ne: null }
+  }).select("_id referredBy");
+
+  if (!settledUsers.length) return;
+
+  const referrerIds = [
+    ...new Set(settledUsers.map((user) => String(user.referredBy)))
+  ];
+
+  for (const referrerId of referrerIds) {
+    const alreadyCredited = await Transaction.findOne({
+      user: referrerId,
+      type: "referral",
+      status: "approved",
+      note: TRADE_REFERRAL_REWARD_NOTE
+    });
+
+    if (alreadyCredited) continue;
+
+    const completedTradeReferrals = await getCompletedTradeReferralCount(referrerId);
+
+    if (completedTradeReferrals < TRADE_REFERRAL_REQUIRED_COUNT) continue;
+
+    const referrer = await User.findById(referrerId);
+
+    if (!referrer || !referrer.isActive) continue;
+
+    referrer.walletBalance = roundAmount(
+      Number(referrer.walletBalance || 0) + TRADE_REFERRAL_REWARD_AMOUNT
+    );
+
+    referrer.referralBonus = roundAmount(
+      Number(referrer.referralBonus || 0) + TRADE_REFERRAL_REWARD_AMOUNT
+    );
+
+    await referrer.save();
+
+    await Transaction.create({
+      user: referrer._id,
+      type: "referral",
+      amount: TRADE_REFERRAL_REWARD_AMOUNT,
+      status: "approved",
+      note: TRADE_REFERRAL_REWARD_NOTE,
+      approvedAt: new Date()
+    });
+  }
+};
+
 const settleActiveTrades = async (profitRecord) => {
   const activeTrades = await Trade.find({ status: "active" }).sort({
     createdAt: 1
   });
 
   let settledCount = 0;
+  const settledUserIds = [];
 
   for (const trade of activeTrades) {
     const user = await User.findById(trade.user);
@@ -310,7 +391,10 @@ const settleActiveTrades = async (profitRecord) => {
     await trade.save();
 
     settledCount += 1;
+    settledUserIds.push(user._id);
   }
+
+  await creditTradeReferralRewardForSettledUsers(settledUserIds);
 
   return settledCount;
 };
@@ -406,13 +490,14 @@ exports.startTrade = async (req, res) => {
     user.walletBalance = roundAmount(walletBalance - amountFromWallet);
     remaining = roundAmount(remaining - amountFromWallet);
 
-    const lockDeduction = remaining > 0
-      ? deductFromLockEntries(user, remaining)
-      : {
-          amountFromLock: 0,
-          lockedParts: [],
-          remaining: 0
-        };
+    const lockDeduction =
+      remaining > 0
+        ? deductFromLockEntries(user, remaining)
+        : {
+            amountFromLock: 0,
+            lockedParts: [],
+            remaining: 0
+          };
 
     if (lockDeduction.remaining > 0) {
       return res.status(400).json({

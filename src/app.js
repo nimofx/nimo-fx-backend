@@ -8,6 +8,7 @@ const rateLimit = require("express-rate-limit");
 
 const authRoutes = require("./routes/authRoutes");
 const userRoutes = require("./routes/userRoutes");
+const referralRoutes = require("./routes/referralRoutes");
 const transactionRoutes = require("./routes/transactionRoutes");
 const kycRoutes = require("./routes/kycRoutes");
 const supportRoutes = require("./routes/supportRoutes");
@@ -45,6 +46,7 @@ app.get("/", (req, res) => {
 
 // ROUTES
 app.use("/api/auth", authRoutes);
+app.use("/api/user/referral", referralRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api", transactionRoutes);
 app.use("/api", kycRoutes);

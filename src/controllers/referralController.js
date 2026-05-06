@@ -1,5 +1,16 @@
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
+const Trade = require("../models/Trade");
+
+const DEPOSIT_REFERRAL_REQUIRED_COUNT = 5;
+const DEPOSIT_REFERRAL_REWARD_AMOUNT = 100;
+const DEPOSIT_REFERRAL_REWARD_NOTE = "5 active deposit referrals reward";
+
+const TRADE_REFERRAL_REQUIRED_COUNT = 20;
+const TRADE_REFERRAL_REWARD_AMOUNT = 500;
+const TRADE_REFERRAL_REWARD_NOTE = "20 active trade referrals reward";
+
+const roundAmount = (value) => Number(Number(value || 0).toFixed(8));
 
 const generateReferralCode = () => {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -66,13 +77,18 @@ const getCommissionByTier = (tier) => {
   return { directCommission: 8, indirectCommission: 2 };
 };
 
-const getActiveReferralCount = async (userIds) => {
-  if (!userIds || userIds.length === 0) return 0;
+const getDepositReferralStats = async (directUserIds) => {
+  if (!directUserIds || directUserIds.length === 0) {
+    return {
+      activeDepositReferrals: 0,
+      depositMap: {}
+    };
+  }
 
-  const result = await Transaction.aggregate([
+  const depositTotals = await Transaction.aggregate([
     {
       $match: {
-        user: { $in: userIds },
+        user: { $in: directUserIds },
         type: "deposit",
         status: "approved"
       }
@@ -82,18 +98,157 @@ const getActiveReferralCount = async (userIds) => {
         _id: "$user",
         totalDeposit: { $sum: "$amount" }
       }
-    },
-    {
-      $match: {
-        totalDeposit: { $gte: 100 }
-      }
-    },
-    {
-      $count: "activeCount"
     }
   ]);
 
-  return Number(result?.[0]?.activeCount || 0);
+  const depositMap = {};
+  let activeDepositReferrals = 0;
+
+  depositTotals.forEach((item) => {
+    const totalDeposit = Number(item.totalDeposit || 0);
+    depositMap[String(item._id)] = totalDeposit;
+
+    if (totalDeposit >= 100) {
+      activeDepositReferrals += 1;
+    }
+  });
+
+  return {
+    activeDepositReferrals,
+    depositMap
+  };
+};
+
+const getTradeReferralStats = async (directUserIds) => {
+  if (!directUserIds || directUserIds.length === 0) {
+    return {
+      activeTradeReferrals: 0,
+      tradeMap: {}
+    };
+  }
+
+  const tradeStats = await Trade.aggregate([
+    {
+      $match: {
+        user: { $in: directUserIds },
+        status: "settled"
+      }
+    },
+    {
+      $group: {
+        _id: "$user",
+        completedTrades: { $sum: 1 },
+        totalTradeAmount: { $sum: "$amount" },
+        lastSettledAt: { $max: "$settledAt" }
+      }
+    }
+  ]);
+
+  const tradeMap = {};
+
+  tradeStats.forEach((item) => {
+    tradeMap[String(item._id)] = {
+      completedTrades: Number(item.completedTrades || 0),
+      totalTradeAmount: Number(item.totalTradeAmount || 0),
+      lastSettledAt: item.lastSettledAt || null
+    };
+  });
+
+  return {
+    activeTradeReferrals: tradeStats.length,
+    tradeMap
+  };
+};
+
+const creditDepositReferralRewardIfEligible = async (user, activeDepositReferrals) => {
+  if (user.premiumRewardCredited) {
+    return {
+      credited: true
+    };
+  }
+
+  if (activeDepositReferrals < DEPOSIT_REFERRAL_REQUIRED_COUNT) {
+    return {
+      credited: false
+    };
+  }
+
+  user.premiumRewardUnlocked = true;
+  user.premiumRewardCredited = true;
+  user.walletBalance = roundAmount(
+    Number(user.walletBalance || 0) + DEPOSIT_REFERRAL_REWARD_AMOUNT
+  );
+  user.referralBonus = roundAmount(
+    Number(user.referralBonus || 0) + DEPOSIT_REFERRAL_REWARD_AMOUNT
+  );
+
+  await user.save();
+
+  const existingTransaction = await Transaction.findOne({
+    user: user._id,
+    type: "referral",
+    status: "approved",
+    note: DEPOSIT_REFERRAL_REWARD_NOTE
+  });
+
+  if (!existingTransaction) {
+    await Transaction.create({
+      user: user._id,
+      type: "referral",
+      amount: DEPOSIT_REFERRAL_REWARD_AMOUNT,
+      status: "approved",
+      note: DEPOSIT_REFERRAL_REWARD_NOTE,
+      approvedAt: new Date()
+    });
+  }
+
+  return {
+    credited: true
+  };
+};
+
+const creditTradeReferralRewardIfEligible = async (user, activeTradeReferrals) => {
+  const existingTransaction = await Transaction.findOne({
+    user: user._id,
+    type: "referral",
+    status: "approved",
+    note: TRADE_REFERRAL_REWARD_NOTE
+  });
+
+  if (existingTransaction) {
+    return {
+      credited: true
+    };
+  }
+
+  if (activeTradeReferrals < TRADE_REFERRAL_REQUIRED_COUNT) {
+    return {
+      credited: false
+    };
+  }
+
+  user.walletBalance = roundAmount(
+    Number(user.walletBalance || 0) + TRADE_REFERRAL_REWARD_AMOUNT
+  );
+
+  user.referralBonus = roundAmount(
+    Number(user.referralBonus || 0) + TRADE_REFERRAL_REWARD_AMOUNT
+  );
+
+  await user.save();
+
+  await Transaction.create({
+    user: user._id,
+    type: "referral",
+    amount: TRADE_REFERRAL_REWARD_AMOUNT,
+    status: "approved",
+    note: TRADE_REFERRAL_REWARD_NOTE,
+    approvedAt: new Date()
+  });
+
+  return {
+    credited: true
+  };
 };
 
 exports.getReferral = async (req, res) => {
@@ -106,7 +261,9 @@ exports.getReferral = async (req, res) => {
 
     const directUsersList = await User.find({
       referredBy: req.user._id
-    }).select("_id");
+    })
+      .select("_id name email phone createdAt")
+      .sort({ createdAt: -1 });
 
     const directUserIds = directUsersList.map((user) => user._id);
 
@@ -118,18 +275,57 @@ exports.getReferral = async (req, res) => {
         })
       : 0;
 
-    const activeReferrals = await getActiveReferralCount(directUserIds);
+    const { activeDepositReferrals, depositMap } =
+      await getDepositReferralStats(directUserIds);
 
-    const requiredReferrals = 5;
+    const { activeTradeReferrals, tradeMap } =
+      await getTradeReferralStats(directUserIds);
 
-    if (activeReferrals >= requiredReferrals && !req.user.premiumRewardCredited) {
-      req.user.premiumRewardUnlocked = true;
-      req.user.premiumRewardCredited = true;
-      req.user.walletBalance = Number(req.user.walletBalance || 0) + 100;
-      req.user.referralBonus = Number(req.user.referralBonus || 0) + 100;
+    const depositRewardResult = await creditDepositReferralRewardIfEligible(
+      req.user,
+      activeDepositReferrals
+    );
 
-      await req.user.save();
-    }
+    const tradeRewardResult = await creditTradeReferralRewardIfEligible(
+      req.user,
+      activeTradeReferrals
+    );
+
+    const referralHistory = directUsersList.map((user) => {
+      const userId = String(user._id);
+      const totalDeposit = Number(depositMap[userId] || 0);
+      const tradeInfo = tradeMap[userId] || {};
+      const completedTrades = Number(tradeInfo.completedTrades || 0);
+
+      return {
+        id: user._id,
+        name: user.name || "User",
+        email: user.email || "",
+        phone: user.phone || "",
+        joinedAt: user.createdAt,
+
+        totalDeposit,
+        depositStatus: totalDeposit >= 100 ? "active" : "inactive",
+
+        completedTrades,
+        totalTradeAmount: Number(tradeInfo.totalTradeAmount || 0),
+        lastSettledAt: tradeInfo.lastSettledAt || null,
+        tradeStatus: completedTrades > 0 ? "completed" : "pending",
+
+        status: totalDeposit >= 100 || completedTrades > 0 ? "active" : "inactive"
+      };
+    });
+
+    const requiredReferrals = DEPOSIT_REFERRAL_REQUIRED_COUNT;
+    const activeReferrals = activeDepositReferrals;
+    const remainingReferrals = Math.max(requiredReferrals - activeReferrals, 0);
+
+    const tradeRequiredReferrals = TRADE_REFERRAL_REQUIRED_COUNT;
+    const completedTradeReferrals = activeTradeReferrals;
+    const tradeRemainingReferrals = Math.max(
+      tradeRequiredReferrals - completedTradeReferrals,
+      0
+    );
 
     res.json({
       success: true,
@@ -139,8 +335,18 @@ exports.getReferral = async (req, res) => {
 
       directUsers,
       subUsers,
+
       activeReferrals,
       requiredReferrals,
+      remainingReferrals,
+
+      activeDepositReferrals,
+      completedTradeReferrals,
+      activeTradeReferrals,
+      tradeRequiredReferrals,
+      tradeRemainingReferrals,
+
+      referralHistory,
 
       referralBonus: Number(req.user.referralBonus || 0),
       totalApprovedDeposit,
@@ -149,9 +355,27 @@ exports.getReferral = async (req, res) => {
       directCommission,
       indirectCommission,
 
-      premiumRewardUnlocked: Boolean(req.user.premiumRewardUnlocked)
+      premiumRewardUnlocked: Boolean(depositRewardResult.credited),
+
+      depositReferralReward: {
+        requiredReferrals,
+        activeReferrals,
+        remainingReferrals,
+        rewardAmount: DEPOSIT_REFERRAL_REWARD_AMOUNT,
+        credited: Boolean(depositRewardResult.credited)
+      },
+
+      tradeReferralReward: {
+        requiredReferrals: tradeRequiredReferrals,
+        completedReferrals: completedTradeReferrals,
+        remainingReferrals: tradeRemainingReferrals,
+        rewardAmount: TRADE_REFERRAL_REWARD_AMOUNT,
+        credited: Boolean(tradeRewardResult.credited)
+      }
     });
   } catch (error) {
+    console.error("Get referral error:", error);
+
     res.status(500).json({
       success: false,
       message: "Failed to fetch referral data"
@@ -208,6 +432,8 @@ exports.applyReferralCode = async (req, res) => {
       message: "Referral code applied successfully"
     });
   } catch (error) {
+    console.error("Apply referral error:", error);
+
     res.status(500).json({
       success: false,
       message: "Failed to apply referral code"
