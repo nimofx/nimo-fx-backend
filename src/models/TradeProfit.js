@@ -5,7 +5,7 @@ const tradeProfitSchema = new mongoose.Schema(
     profitPercent: {
       type: Number,
       required: true,
-      min: 0,
+      min: -100,
       max: 100
     },
 

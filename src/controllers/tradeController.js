@@ -486,7 +486,7 @@ exports.createTradeProfit = async (req, res) => {
   try {
     const profitPercent = Number(req.body.profitPercent);
 
-    if (isNaN(profitPercent) || profitPercent < 0 || profitPercent > 100) {
+    if (isNaN(profitPercent) || profitPercent < -100 || profitPercent > 100) {
       return res.status(400).json({
         success: false,
         message: "Enter valid profit percentage"
