@@ -417,6 +417,228 @@ exports.updateUserBalance = async (req, res) => {
   }
 };
 
+// ================= REFERRALS =================
+
+exports.getReferralSummary = async (req, res) => {
+  try {
+    const users = await User.find({})
+      .select("name fullName email mobile phone referralCode referredBy isActive createdAt")
+      .populate("referredBy", "name fullName email mobile phone referralCode")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const directCounts = await User.aggregate([
+      {
+        $match: {
+          referredBy: { $ne: null }
+        }
+      },
+      {
+        $group: {
+          _id: "$referredBy",
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const activeCounts = await User.aggregate([
+      {
+        $match: {
+          referredBy: { $ne: null }
+        }
+      },
+      {
+        $lookup: {
+          from: "transactions",
+          let: { referredUserId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$user", "$$referredUserId"] },
+                    { $eq: ["$type", "deposit"] },
+                    { $eq: ["$status", "approved"] }
+                  ]
+                }
+              }
+            },
+            {
+              $group: {
+                _id: "$user",
+                totalDeposit: { $sum: "$amount" }
+              }
+            },
+            {
+              $match: {
+                totalDeposit: { $gte: 100 }
+              }
+            }
+          ],
+          as: "approvedDepositStats"
+        }
+      },
+      {
+        $match: {
+          "approvedDepositStats.0": { $exists: true }
+        }
+      },
+      {
+        $group: {
+          _id: "$referredBy",
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const directCountMap = {};
+    directCounts.forEach((item) => {
+      if (item?._id) {
+        directCountMap[item._id.toString()] = item.count;
+      }
+    });
+
+    const activeCountMap = {};
+    activeCounts.forEach((item) => {
+      if (item?._id) {
+        activeCountMap[item._id.toString()] = item.count;
+      }
+    });
+
+    const referrals = users.map((user) => {
+      const userId = user._id.toString();
+
+      return {
+        _id: user._id,
+        name: user.name || user.fullName || "",
+        fullName: user.fullName || user.name || "",
+        email: user.email || "",
+        mobile: user.mobile || user.phone || "",
+        phone: user.phone || user.mobile || "",
+        referralCode: user.referralCode || "",
+        isActive: user.isActive,
+        referredBy: user.referredBy
+          ? {
+              _id: user.referredBy._id,
+              name: user.referredBy.name || user.referredBy.fullName || "",
+              fullName: user.referredBy.fullName || user.referredBy.name || "",
+              email: user.referredBy.email || "",
+              mobile: user.referredBy.mobile || user.referredBy.phone || "",
+              phone: user.referredBy.phone || user.referredBy.mobile || "",
+              referralCode: user.referredBy.referralCode || ""
+            }
+          : null,
+        directReferralCount: directCountMap[userId] || 0,
+        activeReferralCount: activeCountMap[userId] || 0,
+        createdAt: user.createdAt
+      };
+    });
+
+    res.json({
+      success: true,
+      referrals
+    });
+  } catch (error) {
+    console.error("Referral summary error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch referral summary"
+    });
+  }
+};
+
+exports.getUserDirectReferrals = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const user = await User.findById(id)
+      .select("name fullName email mobile phone referralCode")
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    const directUsers = await User.find({ referredBy: id })
+      .select("name fullName email mobile phone referralCode isActive createdAt")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const directUserIds = directUsers.map((item) => item._id);
+
+    let depositMap = {};
+
+    if (directUserIds.length > 0) {
+      const depositStats = await Transaction.aggregate([
+        {
+          $match: {
+            user: { $in: directUserIds },
+            type: "deposit",
+            status: "approved"
+          }
+        },
+        {
+          $group: {
+            _id: "$user",
+            totalApprovedDeposit: { $sum: "$amount" }
+          }
+        }
+      ]);
+
+      depositStats.forEach((item) => {
+        if (item?._id) {
+          depositMap[item._id.toString()] = Number(item.totalApprovedDeposit || 0);
+        }
+      });
+    }
+
+    const directReferrals = directUsers.map((item) => {
+      const totalApprovedDeposit = Number(depositMap[item._id.toString()] || 0);
+      const isActiveReferral = totalApprovedDeposit >= 100;
+
+      return {
+        _id: item._id,
+        name: item.name || item.fullName || "",
+        fullName: item.fullName || item.name || "",
+        email: item.email || "",
+        mobile: item.mobile || item.phone || "",
+        phone: item.phone || item.mobile || "",
+        referralCode: item.referralCode || "",
+        isActive: item.isActive,
+        joinedAt: item.createdAt,
+        totalApprovedDeposit,
+        depositApproved: totalApprovedDeposit > 0,
+        active: isActiveReferral
+      };
+    });
+
+    res.json({
+      success: true,
+      user: {
+        _id: user._id,
+        name: user.name || user.fullName || "",
+        fullName: user.fullName || user.name || "",
+        email: user.email || "",
+        mobile: user.mobile || user.phone || "",
+        phone: user.phone || user.mobile || "",
+        referralCode: user.referralCode || ""
+      },
+      totalDirectReferrals: directReferrals.length,
+      activeDirectReferrals: directReferrals.filter((item) => item.active).length,
+      directReferrals
+    });
+  } catch (error) {
+    console.error("Direct referrals error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch direct referrals"
+    });
+  }
+};
+
 // ================= KYC =================
 
 exports.getAllKyc = async (req, res) => {
