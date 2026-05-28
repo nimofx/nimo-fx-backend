@@ -18,7 +18,10 @@ const {
   getPendingTransactions,
   getAllTransactions,
   approveTransaction,
-  rejectTransaction
+  rejectTransaction,
+
+  getReferralSummary,
+  getUserDirectReferrals
 } = require("../controllers/adminController");
 
 const router = express.Router();
@@ -28,6 +31,10 @@ router.get("/users", protect, adminOnly, getAllUsers);
 router.patch("/users/:id/block", protect, adminOnly, blockUser);
 router.patch("/users/:id/unblock", protect, adminOnly, unblockUser);
 router.patch("/users/:id/balance", protect, adminOnly, updateUserBalance);
+
+// REFERRALS
+router.get("/referrals/summary", protect, adminOnly, getReferralSummary);
+router.get("/referrals/:id/direct", protect, adminOnly, getUserDirectReferrals);
 
 // KYC
 router.get("/kyc", protect, adminOnly, getAllKyc);
